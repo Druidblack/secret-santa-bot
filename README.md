@@ -230,13 +230,13 @@ Bot link: https://t.me/santasecretpresentsbot
 
 The bot automates the entire process:
 
-✔ nobody gets themselves
-✔ each participant receives exactly one recipient
-✔ organizer sends one message with the participants list
-✔ participants join via game code
-✔ bot handles name normalization (ё/e, case, spaces)
-✔ each user always receives the same fixed recipient
-✔ supports multiple games simultaneously
+&nbsp;✔ nobody gets themselves
+&nbsp;✔ each participant receives exactly one recipient
+&nbsp;✔ organizer sends one message with the participants list
+&nbsp;✔ participants join via game code
+&nbsp;✔ bot handles name normalization (ё/e, case, spaces)
+&nbsp;✔ each user always receives the same fixed recipient
+&nbsp;✔ supports multiple games simultaneously
 
 Built with Python + aiogram 3, ready to run on Replit, VDS, Docker, or any Python server.
 
@@ -245,67 +245,67 @@ Built with Python + aiogram 3, ready to run on Replit, VDS, Docker, or any Pytho
 ✨ **Features**
 
 👑 *For organizers*
- • /newgame — create a new game and receive a game code (e.g. A7F9)
- • send a single message with the full participants list
- • names must be one per line:
+&nbsp; • /newgame — create a new game and receive a game code (e.g. A7F9)
+&nbsp; • send a single message with the full participants list
+ &nbsp;• names must be one per line:
 
 
-Yulia Pavlikova
-Evgenia Dmitrieva
-Elena Meshcheryakova
+&nbsp; Yulia Pavlikova
+&nbsp; Evgenia Dmitrieva
+&nbsp; Elena Meshcheryakova
 
 
- • the bot:
- • cleans the list
- • removes duplicates
- • supports 2+ participants
- • generates a fair derangement (nobody gets themselves)
+ &nbsp;• the bot:
+ &nbsp;• cleans the list
+ &nbsp;• removes duplicates
+ &nbsp;• supports 2+ participants
+ &nbsp;• generates a fair derangement (nobody gets themselves)
 
 **After that, the organizer shares the bot link + game code with participants.**
 
 
 🎁 *For participants*
- • send /start
- • enter the game code from the organizer (e.g. A7F9)
- • enter your first and last name
- • press 🎁 Get recipient
- • the bot tells you who you should give a gift to
- • you can press the button as many times as you want — the result never changes
+ &nbsp;• send /start
+ &nbsp;• enter the game code from the organizer (e.g. A7F9)
+ &nbsp;• enter your first and last name
+ &nbsp;• press 🎁 Get recipient
+ &nbsp;• the bot tells you who you should give a gift to
+ &nbsp;• you can press the button as many times as you want — the result never changes
 
 
 🧠 **Smart name processing**
 
 The bot normalizes names:
- • ё = е
- • case-insensitive
- • multiple spaces → one
- • accepts Russian names in any reasonable form
+ &nbsp;• ё = е
+ &nbsp;• case-insensitive
+ &nbsp;• multiple spaces → one
+ &nbsp;• accepts Russian names in any reasonable form
 
 All of the following are treated as the same person:
 
-Ангелина Киселева
-ангелина киселева
-АНГЕЛИНА КИСЕЛЁВА
+&nbsp;Ангелина Киселева
+&nbsp;ангелина киселева
+&nbsp;АНГЕЛИНА КИСЕЛЁВА
 
 
 🏗 **Architecture (explained simply)**
 
- • Game — a single Secret Santa game tied to a game code
- • games[code] — storage of all active games
- • make_derangement() — generates a fair assignment (nobody gets themselves)
- • normalize_name() — normalizes user input
- • aiogram Router — processes commands and messages
- • The bot supports unlimited parallel games — each company has its own code.
+ &nbsp;• Game — a single Secret Santa game tied to a game code
+ &nbsp;• games[code] — storage of all active games
+ &nbsp;• make_derangement() — generates a fair assignment (nobody gets themselves)
+ &nbsp;• normalize_name() — normalizes user input
+ &nbsp;• aiogram Router — processes commands and messages
+&nbsp; • The bot supports unlimited parallel games — each company has its own code.
 
 
 
 🎮 **Commands**
 
 *Command Description*
-/start Join a game; enter game code
-/help Full instructions
-/newgame Create a new game (organizer only)
-/reset Reset the organizer’s active game
+&nbsp;/start Join a game; enter game code
+&nbsp;/help Full instructions
+&nbsp;/newgame Create a new game (organizer only)
+&nbsp;/reset Reset the organizer’s active game
 
 
 
@@ -349,6 +349,7 @@ Bot link: https://t.me/santasecretpresentsbot
 *Contact: @angel_eugeniya (Telegram)*
 
 ❄️ Enjoy your Secret Santa experience!
+
 
 
 
