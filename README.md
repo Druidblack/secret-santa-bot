@@ -222,6 +222,7 @@ Telegram bot link: https://t.me/santasecretpresentsbot
 
 **A universal Telegram bot for running the Secret Santa game in companies, teams, university groups, or family chats.
 The bot ensures a fair and fully automated gift assignment:**
+
  • nobody receives themselves
  • each participant gets exactly one recipient
  • the organizer provides the list of participants
@@ -235,6 +236,7 @@ The bot is built with Python + aiogram 3 and can run on Replit, VDS, or any stan
 ✨ **Features**
 
 👑 **For organizers**
+
  • /newgame creates a new Secret Santa game
  • the bot waits for the full participant list
  • names must be sent line-by-line:
@@ -248,6 +250,7 @@ Elena Meshcheryakova
 
 
 🎁 **For participants**
+
  • send /start
  • enter your first and last name
  • receive the button 🎁 Get recipient
@@ -258,6 +261,7 @@ Elena Meshcheryakova
 🧠 **Smart name processing**
 
 The bot normalizes text:
+
  • ё ≡ е
  • letter case does not matter (анГЕлина киСЕЛЕва)
  • extra spaces are ignored
@@ -325,5 +329,6 @@ Bot link: https://t.me/santasecretpresentsbot
 
 
 ❄ Enjoy your Secret Santa!
+
 
 
