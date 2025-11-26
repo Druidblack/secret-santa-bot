@@ -79,6 +79,14 @@ def parse_participant_line(line: str) -> (str, Optional[str]):
     return display_name, handle
 
 
+def make_gift_keyboard() -> types.ReplyKeyboardMarkup:
+    """Клавиатура с кнопкой '🎁 Получить имя'."""
+    return types.ReplyKeyboardMarkup(
+        keyboard=[[types.KeyboardButton(text="🎁 Получить имя")]],
+        resize_keyboard=True,
+    )
+
+
 # ---------- СТРУКТУРА ИГРЫ ----------
 
 class Game:
@@ -657,7 +665,6 @@ async def cmd_orgmenu(message: types.Message):
     """
     organizer_id = message.from_user.id
 
-    # выбираем все игры, где этот пользователь — организатор
     organizer_game_list = [
         (game_id, g) for game_id, g in games.items() if g.organizer_id == organizer_id
     ]
@@ -750,7 +757,6 @@ async def cb_org_game(callback: types.CallbackQuery):
         )
         return
 
-    # делаем эту игру "активной" для /reset, /addplayer, /delplayer
     organizer_games[organizer_id] = game_id
     save_state()
 
@@ -807,7 +813,6 @@ async def cb_org_members(callback: types.CallbackQuery):
         )
         return
 
-    # строим name -> handle
     name_to_handle: Dict[str, str] = {}
     for handle, name in game.handle_to_name.items():
         name_to_handle[name] = handle
@@ -865,8 +870,9 @@ async def handle_text(message: types.Message):
     1) Пользователь после /wish присылает текст пожелания
     2) Ждём список участников от организатора после /newgame
     3) Пользователь вводит код игры, чтобы присоединиться
-       (и тут же автоматически определяем его по @username, если можем)
-    4) Пользователь (уже в игре) вводит своё имя и фамилию (может с @никнеймом)
+    4) Пользователь (уже в игре) что-то пишет:
+       - если ещё не опознан — пытаемся по @username или по Имя Фамилия
+       - если уже опознан — просто напоминаем про кнопку
     """
     text = (message.text or "").strip()
     user_id = message.from_user.id
@@ -986,14 +992,11 @@ async def handle_text(message: types.Message):
         save_state()
 
         if auto_bound:
-            kb = types.ReplyKeyboardMarkup(
-                keyboard=[[types.KeyboardButton(text="🎁 Получить имя")]],
-                resize_keyboard=True,
-            )
+            kb = make_gift_keyboard()
             await message.answer(
                 f"Игра с кодом *{game_id}* найдена! 🎄\n"
-                f"Привет, *{pretty}*! Я узнал тебя по твоему @username 😎\n\n"
-                "Теперь просто нажми «🎁 Получить имя», чтобы узнать, кому ты даришь подарок.\n\n"
+                f"Я нашёл тебя в списке как *{pretty}* по твоему @username.\n\n"
+                "Теперь нажми кнопку «🎁 Получить имя», чтобы узнать, кому ты даришь подарок.\n\n"
                 "Если хочешь, можешь указать пожелание к подарку командой /wish.",
                 parse_mode="Markdown",
                 reply_markup=kb,
@@ -1006,7 +1009,7 @@ async def handle_text(message: types.Message):
             )
         return
 
-    # --- 4) Пользователь уже в игре — вводит своё имя и фамилию ---
+    # --- 4) Пользователь уже в игре что-то пишет ---
     game_id = user_games[user_id]
     game = games.get(game_id)
 
@@ -1017,7 +1020,34 @@ async def handle_text(message: types.Message):
         )
         return
 
-    # ВАЖНО: убираем возможный хвост '@nickname', чтобы не ломать поиск
+    # Если мы УЖЕ знаем его имя — не просим вводить его снова
+    if user_id in game.user_names:
+        kb = make_gift_keyboard()
+        await message.answer(
+            "Я уже знаю, кто ты 🙂\n"
+            "Просто нажми кнопку «🎁 Получить имя», чтобы узнать, кому ты даришь подарок.",
+            reply_markup=kb,
+        )
+        return
+
+    # Если ещё не знаем — сперва пробуем по @username (на случай старых игр / старого состояния)
+    tg_username = message.from_user.username
+    if tg_username:
+        h = tg_username.lower()
+        pretty = game.handle_to_name.get(h)
+        if pretty:
+            game.user_names[user_id] = pretty
+            save_state()
+            kb = make_gift_keyboard()
+            await message.answer(
+                f"Я нашёл тебя в списке как *{pretty}* по твоему @username.\n\n"
+                "Теперь нажми кнопку «🎁 Получить имя», чтобы узнать, кому ты даришь подарок.",
+                parse_mode="Markdown",
+                reply_markup=kb,
+            )
+            return
+
+    # ВАЖНО: убираем возможный хвост '@nickname', чтобы не ломать поиск по имени
     name_only, _ = parse_participant_line(text)
     norm = normalize_name(name_only)
 
@@ -1037,10 +1067,7 @@ async def handle_text(message: types.Message):
     game.user_names[user_id] = pretty_name
     save_state()
 
-    kb = types.ReplyKeyboardMarkup(
-        keyboard=[[types.KeyboardButton(text="🎁 Получить имя")]],
-        resize_keyboard=True,
-    )
+    kb = make_gift_keyboard()
 
     await message.answer(
         f"Отлично, {pretty_name}! 🎄\n"
