@@ -32,7 +32,6 @@ def make_derangement(items: List[str]) -> List[str]:
     """
     Делает случайную перестановку без неподвижных точек:
     никто не получает сам себя.
-    items: список имён (в фиксированном порядке).
     """
     if len(items) < 2:
         raise ValueError("Нужно минимум 2 участника для Тайного Санты")
@@ -125,10 +124,10 @@ dp = Dispatcher()
 # все активные игры: game_id -> Game
 games: Dict[str, Game] = {}
 
-# организатор -> код игры, от которого сейчас ждём список участников
+# организатор -> код игры, от которого сейчас ждём список участников (после /newgame)
 pending_game_codes: Dict[int, str] = {}
 
-# организатор -> "последняя активная" игра (для /reset)
+# организатор -> "последняя активная" игра (для /reset, /addplayer, /delplayer)
 organizer_games: Dict[int, str] = {}
 
 # пользователь -> код игры, в которой он участвует
@@ -139,6 +138,8 @@ waiting_wish_users: Set[int] = set()
 
 STATE_FILE = "secret_santa_state.json"
 
+
+# ---------- СЕРИАЛИЗАЦИЯ СОСТОЯНИЯ ----------
 
 def save_state() -> None:
     data = {
@@ -185,8 +186,87 @@ def load_state() -> None:
             pass
 
 
-# загружаем состояние при старте
 load_state()
+
+
+# ---------- ПОМОЩНИКИ ДЛЯ РЕДАКТИРОВАНИЯ УЧАСТНИКОВ ----------
+
+def add_participant_to_game(game: Game, new_name: str) -> None:
+    """
+    Добавить нового участника с минимальной правкой распределения:
+    берём случайного дарителя g, у которого был получатель r.
+    Делаем g -> new, new -> r, всё остальное не трогаем.
+    """
+    pretty = new_name.strip()
+    if not pretty:
+        raise ValueError("Имя участника не может быть пустым.")
+    norm = normalize_name(pretty)
+    if norm in game.name_index:
+        raise ValueError("Участник с таким именем уже есть в этой игре.")
+
+    old_names = list(game.names)
+    if len(old_names) < 2:
+        # по нашей логике игра с <2 участниками невозможна, но на всякий случай
+        raise ValueError("Нельзя добавлять участника в игру с менее чем 2 участниками.")
+
+    game.names.append(pretty)
+    game.name_index[norm] = pretty
+
+    # минимальная правка дерранжмента
+    g = random.choice(old_names)
+    r = game.assignment_by_name[g]
+    game.assignment_by_name[g] = pretty
+    game.assignment_by_name[pretty] = r
+
+
+def remove_participant_from_game(game_id: str, game: Game, name_to_remove: str) -> str:
+    """
+    Удалить участника с минимальной правкой распределения:
+    - в общем случае: A -> name_to_remove -> B заменяем на A -> B;
+    - если получается самоназначение или что-то странное — пересчитаем всё целиком.
+    Возвращает "patched" или "recomputed" для информации.
+    """
+    if name_to_remove not in game.names:
+        raise ValueError("Такого участника нет в игре.")
+
+    if len(game.names) <= 2:
+        raise ValueError("Нельзя удалить участника: останется меньше 2 участников.")
+
+    # кто дарил удаляемому?
+    giver_pre = None
+    for giver, receiver in game.assignment_by_name.items():
+        if receiver == name_to_remove:
+            giver_pre = giver
+            break
+
+    receiver_y = game.assignment_by_name.get(name_to_remove)
+
+    # убираем из списков
+    game.names.remove(name_to_remove)
+    # из словаря нормализованных имён
+    norm = normalize_name(name_to_remove)
+    game.name_index.pop(norm, None)
+    # из распределения
+    if name_to_remove in game.assignment_by_name:
+        del game.assignment_by_name[name_to_remove]
+    # из пожеланий
+    game.gift_wishes.pop(name_to_remove, None)
+    # из user_names и глобальной карты user_games
+    to_drop_ids = [uid for uid, nm in game.user_names.items() if nm == name_to_remove]
+    for uid in to_drop_ids:
+        del game.user_names[uid]
+        if user_games.get(uid) == game_id:
+            del user_games[uid]
+
+    # если не получилось аккуратно "выкусить" из цикла — пересчитываем полностью
+    if giver_pre is None or receiver_y is None or receiver_y == giver_pre:
+        receivers = make_derangement(game.names)
+        game.assignment_by_name = {giver: rec for giver, rec in zip(game.names, receivers)}
+        return "recomputed"
+
+    # нормальный случай: просто замыкаем A -> B
+    game.assignment_by_name[giver_pre] = receiver_y
+    return "patched"
 
 
 # ------------------ ОБРАБОТЧИКИ КОМАНД ------------------
@@ -200,7 +280,12 @@ async def cmd_help(message: types.Message):
         "1. Напиши /newgame — я создам *код игры*.\n"
         "2. В ответ пришли список участников: по одному `Имя Фамилия` в каждой строке.\n"
         "3. Отправь участникам код игры и ссылку на бота.\n"
-        "4. В любой момент используй /orgmenu, чтобы открыть меню организатора и посмотреть свои игры.\n\n"
+        "4. Используй /orgmenu, чтобы открыть меню организатора и выбрать игру.\n"
+        "5. После выбора игры можно:\n"
+        "   • смотреть списки через кнопки меню\n"
+        "   • редактировать участников командами:\n"
+        "     `/addplayer Имя Фамилия` — добавить\n"
+        "     `/delplayer Имя Фамилия` — удалить\n\n"
         "*Для участника:*\n"
         "1. Напиши /start.\n"
         "2. Введи *код игры* от организатора (например: `A7F9`).\n"
@@ -405,6 +490,106 @@ async def cmd_wish(message: types.Message):
     )
 
 
+# ---------- КОМАНДЫ РЕДАКТИРОВАНИЯ УЧАСТНИКОВ ----------
+
+
+@dp.message(F.text.startswith("/addplayer"))
+async def cmd_addplayer(message: types.Message):
+    """
+    /addplayer Имя Фамилия — добавить участника в ТЕКУЩУЮ выбранную игру организатора.
+    Текущая игра выбирается через /orgmenu (последняя выбранная).
+    """
+    organizer_id = message.from_user.id
+    if organizer_id not in organizer_games:
+        await message.answer(
+            "Сначала выберите нужную игру в меню /orgmenu,\n"
+            "а потом используйте команду /addplayer."
+        )
+        return
+
+    game_id = organizer_games[organizer_id]
+    game = games.get(game_id)
+    if game is None or game.organizer_id != organizer_id:
+        await message.answer("Игра не найдена или вы не являетесь её организатором.")
+        return
+
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
+        await message.answer(
+            "Использование:\n`/addplayer Имя Фамилия`",
+            parse_mode="Markdown",
+        )
+        return
+
+    new_name = parts[1].strip()
+    try:
+        add_participant_to_game(game, new_name)
+    except ValueError as e:
+        await message.answer(str(e))
+        return
+
+    save_state()
+    await message.answer(
+        f"Участник «{new_name}» добавлен в игру {game_id}.\n"
+        "Распределение подарков изменено минимально (затронуты только пары с этим участником)."
+    )
+
+
+@dp.message(F.text.startswith("/delplayer"))
+async def cmd_delplayer(message: types.Message):
+    """
+    /delplayer Имя Фамилия — удалить участника из ТЕКУЩЕЙ выбранной игры организатора.
+    """
+    organizer_id = message.from_user.id
+    if organizer_id not in organizer_games:
+        await message.answer(
+            "Сначала выберите нужную игру в меню /orgmenu,\n"
+            "а потом используйте команду /delplayer."
+        )
+        return
+
+    game_id = organizer_games[organizer_id]
+    game = games.get(game_id)
+    if game is None or game.organizer_id != organizer_id:
+        await message.answer("Игра не найдена или вы не являетесь её организатором.")
+        return
+
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
+        await message.answer(
+            "Использование:\n`/delplayer Имя Фамилия`",
+            parse_mode="Markdown",
+        )
+        return
+
+    raw_name = parts[1].strip()
+    norm = normalize_name(raw_name)
+    pretty = game.name_index.get(norm)
+    if not pretty:
+        await message.answer(
+            "Участник с таким именем не найден в этой игре.\n"
+            "Проверьте написание (как в изначальном списке)."
+        )
+        return
+
+    try:
+        mode = remove_participant_from_game(game_id, game, pretty)
+    except ValueError as e:
+        await message.answer(str(e))
+        return
+
+    save_state()
+    text = f"Участник «{pretty}» удалён из игры {game_id}."
+    if mode == "recomputed":
+        text += (
+            "\nПри удалении пришлось полностью перераспределить пары, "
+            "чтобы никому не достался он сам."
+        )
+    else:
+        text += "\nПары скорректированы минимально."
+    await message.answer(text)
+
+
 # ---------- Меню организатора ----------
 
 
@@ -509,6 +694,10 @@ async def cb_org_game(callback: types.CallbackQuery):
         )
         return
 
+    # делаем эту игру "активной" для /reset, /addplayer, /delplayer
+    organizer_games[organizer_id] = game_id
+    save_state()
+
     kb = types.InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -535,7 +724,10 @@ async def cb_org_game(callback: types.CallbackQuery):
     await callback.message.edit_text(
         f"Игра *{game_id}*.\n"
         f"Участников: {len(game.names)}.\n\n"
-        "Выберите, что показать:",
+        "Выберите, что показать, или используйте команды:\n"
+        "`/addplayer Имя Фамилия` — добавить участника\n"
+        "`/delplayer Имя Фамилия` — удалить участника\n"
+        "(из этой игры).",
         reply_markup=kb,
         parse_mode="Markdown",
     )
