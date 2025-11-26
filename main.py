@@ -237,6 +237,40 @@ def load_state() -> None:
 load_state()
 
 
+# ---------- УВЕДОМЛЕНИЕ ДАРИТЕЛЕЙ О ПОЖЕЛАНИИ ----------
+
+async def notify_givers_about_wish(
+    game_id: str,
+    game: Game,
+    wisher_name: str,
+    wish_text: str,
+    is_update: bool,
+) -> None:
+    """
+    Находит всех дарителей, которые дарят wisher_name, и отправляет им уведомление.
+    """
+    action = "обновил(а) своё пожелание" if is_update else "указал(а) своё пожелание"
+
+    # кто дарит этому человеку?
+    givers = [giver for giver, receiver in game.assignment_by_name.items() if receiver == wisher_name]
+    if not givers:
+        return
+
+    for giver_name in givers:
+        # ищем Telegram-пользователя, соответствующего этому имени
+        for uid, uname in game.user_names.items():
+            if uname == giver_name:
+                text = (
+                    f"🎄 Обновление по игре {game_id}.\n\n"
+                    f"Твой человек *{wisher_name}* {action} к подарку:\n"
+                    f"«{wish_text}»"
+                )
+                try:
+                    await bot.send_message(uid, text, parse_mode="Markdown")
+                except Exception as e:
+                    print(f"Не удалось отправить уведомление пользователю {uid}: {e}")
+
+
 # ---------- ПОМОЩНИКИ ДЛЯ РЕДАКТИРОВАНИЯ УЧАСТНИКОВ ----------
 
 def add_participant_to_game(game: Game, line: str) -> None:
@@ -535,6 +569,7 @@ async def cmd_wish(message: types.Message):
     if len(parts) == 2 and parts[1].strip():
         # вариант `/wish текст`
         wish_text = parts[1].strip()
+        had_prev = pretty_name in game.gift_wishes
         game.gift_wishes[pretty_name] = wish_text
         waiting_wish_users.discard(user_id)
         save_state()
@@ -542,6 +577,8 @@ async def cmd_wish(message: types.Message):
             f"Пожелание сохранено! 🎁\n"
             f"{pretty_name}, ты указал(а):\n«{wish_text}»"
         )
+        # уведомляем дарителя
+        await notify_givers_about_wish(game_id, game, pretty_name, wish_text, had_prev)
         return
 
     # просто `/wish` — ждём текст следующим сообщением
@@ -908,12 +945,15 @@ async def handle_text(message: types.Message):
             await message.answer("Пожелание пустое, напиши хотя бы пару слов 🙂")
             return
 
+        had_prev = pretty_name in game_for_wish.gift_wishes
         game_for_wish.gift_wishes[pretty_name] = text
         save_state()
         await message.answer(
             f"Пожелание сохранено! 🎁\n"
             f"{pretty_name}, ты указал(а):\n«{text}»"
         )
+        # уведомляем дарителя
+        await notify_givers_about_wish(game_id_for_wish, game_for_wish, pretty_name, text, had_prev)
         return
 
     # Игнорируем неизвестные команды
