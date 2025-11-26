@@ -1,6 +1,6 @@
 import asyncio
 import random
-from typing import Dict, List, Set
+from typing import Dict, List, Set, Optional
 
 import json
 import os
@@ -56,28 +56,66 @@ def generate_game_id(length: int = 4) -> str:
             return code
 
 
+def parse_participant_line(line: str) -> (str, Optional[str]):
+    """
+    Разбирает строку вида:
+      - 'Иван Иванов'
+      - 'Иван Иванов @druidblack'
+
+    Возвращает (display_name, handle_без_@ или None)
+    """
+    line = line.strip()
+    if not line:
+        return "", None
+
+    parts = line.split()
+    handle = None
+
+    if parts[-1].startswith("@") and len(parts[-1]) > 1:
+        handle = parts[-1][1:]  # без @
+        parts = parts[:-1]
+
+    display_name = " ".join(parts).strip()
+    return display_name, handle
+
+
 # ---------- СТРУКТУРА ИГРЫ ----------
 
 class Game:
-    def __init__(self, organizer_id: int, names_pretty: List[str]):
+    def __init__(self, organizer_id: int, rows: List[str]):
         """
-        names_pretty — список имён, как прислал организатор (красивый вид).
+        rows — список строк от организатора, каждая строка:
+        'Имя Фамилия' или 'Имя Фамилия @username'.
         """
         self.organizer_id: int = organizer_id
 
-        # оставляем только уникальные имена по нормализованной форме
+        # norm -> pretty
         name_index: Dict[str, str] = {}
         unique_pretty: List[str] = []
-        for pretty in names_pretty:
-            pretty = pretty.strip()
+
+        # username (без @, lower) -> pretty
+        self.handle_to_name: Dict[str, str] = {}
+
+        for row in rows:
+            row = row.strip()
+            if not row:
+                continue
+            pretty, handle = parse_participant_line(row)
             if not pretty:
                 continue
+
             norm = normalize_name(pretty)
             if norm in name_index:
-                # дубликаты пропускаем — лучше различать вручную
+                # дубликаты по имени игнорируем
                 continue
+
             name_index[norm] = pretty
             unique_pretty.append(pretty)
+
+            if handle:
+                h = handle.strip().lstrip("@").lower()
+                if h:
+                    self.handle_to_name[h] = pretty
 
         if len(unique_pretty) < 2:
             raise ValueError("После удаления дубликатов осталось меньше 2 участников.")
@@ -102,6 +140,7 @@ class Game:
             "assignment_by_name": self.assignment_by_name,
             "user_names": {str(uid): name for uid, name in self.user_names.items()},
             "gift_wishes": self.gift_wishes,
+            "handle_to_name": self.handle_to_name,
         }
 
     @classmethod
@@ -113,6 +152,7 @@ class Game:
         obj.assignment_by_name = dict(data.get("assignment_by_name", {}))
         obj.user_names = {int(uid): name for uid, name in data.get("user_names", {}).items()}
         obj.gift_wishes = dict(data.get("gift_wishes", {}))
+        obj.handle_to_name = dict(data.get("handle_to_name", {}))
         return obj
 
 
@@ -191,28 +231,35 @@ load_state()
 
 # ---------- ПОМОЩНИКИ ДЛЯ РЕДАКТИРОВАНИЯ УЧАСТНИКОВ ----------
 
-def add_participant_to_game(game: Game, new_name: str) -> None:
+def add_participant_to_game(game: Game, line: str) -> None:
     """
-    Добавить нового участника с минимальной правкой распределения:
-    берём случайного дарителя g, у которого был получатель r.
-    Делаем g -> new, new -> r, всё остальное не трогаем.
+    Добавить нового участника с минимальной правкой распределения.
+    Строка может быть:
+      - 'Имя Фамилия'
+      - 'Имя Фамилия @username'
     """
-    pretty = new_name.strip()
+    pretty, handle = parse_participant_line(line)
+    pretty = pretty.strip()
     if not pretty:
         raise ValueError("Имя участника не может быть пустым.")
+
     norm = normalize_name(pretty)
     if norm in game.name_index:
         raise ValueError("Участник с таким именем уже есть в этой игре.")
 
     old_names = list(game.names)
     if len(old_names) < 2:
-        # по нашей логике игра с <2 участниками невозможна, но на всякий случай
         raise ValueError("Нельзя добавлять участника в игру с менее чем 2 участниками.")
 
     game.names.append(pretty)
     game.name_index[norm] = pretty
 
-    # минимальная правка дерранжмента
+    if handle:
+        h = handle.strip().lstrip("@").lower()
+        if h:
+            game.handle_to_name[h] = pretty
+
+    # минимальная правка дерранжмента:
     g = random.choice(old_names)
     r = game.assignment_by_name[g]
     game.assignment_by_name[g] = pretty
@@ -241,7 +288,7 @@ def remove_participant_from_game(game_id: str, game: Game, name_to_remove: str) 
 
     receiver_y = game.assignment_by_name.get(name_to_remove)
 
-    # убираем из списков
+    # убираем из списков имён
     game.names.remove(name_to_remove)
     # из словаря нормализованных имён
     norm = normalize_name(name_to_remove)
@@ -251,6 +298,10 @@ def remove_participant_from_game(game_id: str, game: Game, name_to_remove: str) 
         del game.assignment_by_name[name_to_remove]
     # из пожеланий
     game.gift_wishes.pop(name_to_remove, None)
+    # из handle_to_name
+    handles_to_drop = [h for h, nm in game.handle_to_name.items() if nm == name_to_remove]
+    for h in handles_to_drop:
+        del game.handle_to_name[h]
     # из user_names и глобальной карты user_games
     to_drop_ids = [uid for uid, nm in game.user_names.items() if nm == name_to_remove]
     for uid in to_drop_ids:
@@ -279,17 +330,19 @@ async def cmd_help(message: types.Message):
         "*Для организатора:*\n"
         "1. Напиши /newgame — я создам *код игры*.\n"
         "2. В ответ пришли список участников: по одному `Имя Фамилия` в каждой строке.\n"
+        "   Можно добавить хэндл: `Иван Иванов @username`.\n"
         "3. Отправь участникам код игры и ссылку на бота.\n"
         "4. Используй /orgmenu, чтобы открыть меню организатора и выбрать игру.\n"
         "5. После выбора игры можно:\n"
         "   • смотреть списки через кнопки меню\n"
         "   • редактировать участников командами:\n"
-        "     `/addplayer Имя Фамилия` — добавить\n"
+        "     `/addplayer Имя Фамилия[@username]` — добавить\n"
         "     `/delplayer Имя Фамилия` — удалить\n\n"
         "*Для участника:*\n"
         "1. Напиши /start.\n"
         "2. Введи *код игры* от организатора (например: `A7F9`).\n"
-        "3. Потом введи свои имя и фамилию.\n"
+        "   Если твой @username уже указан в списке, я узнаю тебя автоматически.\n"
+        "3. Если не узнал — введи свои имя и фамилию.\n"
         "4. Нажми кнопку «🎁 Получить имя».\n"
         "5. Если хочешь, укажи своё пожелание к подарку через /wish.\n\n"
         "*Бот:*\n"
@@ -308,7 +361,8 @@ async def cmd_start(message: types.Message):
         "А затем используй /orgmenu, чтобы смотреть свои игры и пары.\n\n"
         "Если ты *участник* — отправь мне *код игры*, который тебе дал организатор.\n"
         "Например: `A7F9`.\n\n"
-        "После того как введёшь своё имя, можешь задать пожелание к подарку через /wish.",
+        "Если организатор прописал тебя как `Имя Фамилия @твой_ник`, "
+        "я узнаю тебя по @username автоматически.",
         parse_mode="Markdown",
     )
 
@@ -328,7 +382,8 @@ async def cmd_newgame(message: types.Message):
         "Окей! 🎄\n"
         f"Код вашей игры: *{game_id}*.\n\n"
         "1️⃣ Сначала пришлите список участников *одним сообщением*.\n"
-        "Каждый участник — в отдельной строке, формат: `Имя Фамилия`.\n"
+        "Каждый участник — в отдельной строке, формат:\n"
+        "`Имя Фамилия` или `Имя Фамилия @username`.\n"
         "Минимум 2 человека.\n\n"
         "2️⃣ Потом отправьте участникам *код игры* и ссылку на бота.\n",
         parse_mode="Markdown",
@@ -496,7 +551,7 @@ async def cmd_wish(message: types.Message):
 @dp.message(F.text.startswith("/addplayer"))
 async def cmd_addplayer(message: types.Message):
     """
-    /addplayer Имя Фамилия — добавить участника в ТЕКУЩУЮ выбранную игру организатора.
+    /addplayer Имя Фамилия[@username] — добавить участника в ТЕКУЩУЮ игру организатора.
     Текущая игра выбирается через /orgmenu (последняя выбранная).
     """
     organizer_id = message.from_user.id
@@ -516,21 +571,21 @@ async def cmd_addplayer(message: types.Message):
     parts = (message.text or "").split(maxsplit=1)
     if len(parts) < 2 or not parts[1].strip():
         await message.answer(
-            "Использование:\n`/addplayer Имя Фамилия`",
+            "Использование:\n`/addplayer Имя Фамилия[@username]`",
             parse_mode="Markdown",
         )
         return
 
-    new_name = parts[1].strip()
+    new_line = parts[1].strip()
     try:
-        add_participant_to_game(game, new_name)
+        add_participant_to_game(game, new_line)
     except ValueError as e:
         await message.answer(str(e))
         return
 
     save_state()
     await message.answer(
-        f"Участник «{new_name}» добавлен в игру {game_id}.\n"
+        f"Участник «{new_line}» добавлен в игру {game_id}.\n"
         "Распределение подарков изменено минимально (затронуты только пары с этим участником)."
     )
 
@@ -539,6 +594,7 @@ async def cmd_addplayer(message: types.Message):
 async def cmd_delplayer(message: types.Message):
     """
     /delplayer Имя Фамилия — удалить участника из ТЕКУЩЕЙ выбранной игры организатора.
+    Можно написать и с @никнеймом в конце — он будет проигнорирован.
     """
     organizer_id = message.from_user.id
     if organizer_id not in organizer_games:
@@ -562,8 +618,9 @@ async def cmd_delplayer(message: types.Message):
         )
         return
 
-    raw_name = parts[1].strip()
-    norm = normalize_name(raw_name)
+    raw_line = parts[1].strip()
+    name_only, _ = parse_participant_line(raw_line)
+    norm = normalize_name(name_only)
     pretty = game.name_index.get(norm)
     if not pretty:
         await message.answer(
@@ -612,7 +669,6 @@ async def cmd_orgmenu(message: types.Message):
         )
         return
 
-    # сортируем по коду игры, чтобы порядок был стабильным
     organizer_game_list.sort(key=lambda x: x[0])
 
     buttons: List[List[types.InlineKeyboardButton]] = []
@@ -725,7 +781,7 @@ async def cb_org_game(callback: types.CallbackQuery):
         f"Игра *{game_id}*.\n"
         f"Участников: {len(game.names)}.\n\n"
         "Выберите, что показать, или используйте команды:\n"
-        "`/addplayer Имя Фамилия` — добавить участника\n"
+        "`/addplayer Имя Фамилия[@username]` — добавить участника\n"
         "`/delplayer Имя Фамилия` — удалить участника\n"
         "(из этой игры).",
         reply_markup=kb,
@@ -751,13 +807,20 @@ async def cb_org_members(callback: types.CallbackQuery):
         )
         return
 
+    # строим name -> handle
+    name_to_handle: Dict[str, str] = {}
+    for handle, name in game.handle_to_name.items():
+        name_to_handle[name] = handle
+
     lines = ["👥 Список участников и их пожеланий:\n"]
     for i, name in enumerate(game.names, start=1):
+        handle = name_to_handle.get(name)
+        display = f"{name} (@{handle})" if handle else name
         wish = game.gift_wishes.get(name)
         if wish:
-            line = f"{i}. {name} — пожелание: {wish}"
+            line = f"{i}. {display} — пожелание: {wish}"
         else:
-            line = f"{i}. {name} — (пожелание не указано)"
+            line = f"{i}. {display} — (пожелание не указано)"
         lines.append(line)
 
     text = "\n".join(lines)
@@ -802,7 +865,8 @@ async def handle_text(message: types.Message):
     1) Пользователь после /wish присылает текст пожелания
     2) Ждём список участников от организатора после /newgame
     3) Пользователь вводит код игры, чтобы присоединиться
-    4) Пользователь (уже в игре) вводит своё имя и фамилию
+       (и тут же автоматически определяем его по @username, если можем)
+    4) Пользователь (уже в игре) вводит своё имя и фамилию (может с @никнеймом)
     """
     text = (message.text or "").strip()
     user_id = message.from_user.id
@@ -865,7 +929,7 @@ async def handle_text(message: types.Message):
             return
 
         try:
-            game = Game(organizer_id=user_id, names_pretty=lines)
+            game = Game(organizer_id=user_id, rows=lines)
         except ValueError as e:
             await message.answer(f"Ошибка в списке участников: {e}")
             return
@@ -886,7 +950,7 @@ async def handle_text(message: types.Message):
             "1) заходят к боту\n"
             "2) пишут /start\n"
             "3) вводят код игры\n"
-            "4) вводят свои имя и фамилию\n"
+            "4) (если я их не узнал по @username) — вводят имя и фамилию\n"
             "5) нажимают «🎁 Получить имя»\n"
             "6) по желанию пишут /wish и указывают пожелание к подарку",
             parse_mode="Markdown",
@@ -907,12 +971,39 @@ async def handle_text(message: types.Message):
             return
 
         user_games[user_id] = game_id
+
+        # пробуем определить по @username
+        tg_username = message.from_user.username
+        auto_bound = False
+        pretty = None
+        if tg_username:
+            h = tg_username.lower()
+            pretty = game.handle_to_name.get(h)
+            if pretty:
+                game.user_names[user_id] = pretty
+                auto_bound = True
+
         save_state()
-        await message.answer(
-            f"Игра с кодом *{game_id}* найдена! 🎄\n"
-            "Теперь напиши свои *имя и фамилию* так, как они есть в списке у организатора.\n",
-            parse_mode="Markdown",
-        )
+
+        if auto_bound:
+            kb = types.ReplyKeyboardMarkup(
+                keyboard=[[types.KeyboardButton(text="🎁 Получить имя")]],
+                resize_keyboard=True,
+            )
+            await message.answer(
+                f"Игра с кодом *{game_id}* найдена! 🎄\n"
+                f"Привет, *{pretty}*! Я узнал тебя по твоему @username 😎\n\n"
+                "Теперь просто нажми «🎁 Получить имя», чтобы узнать, кому ты даришь подарок.\n\n"
+                "Если хочешь, можешь указать пожелание к подарку командой /wish.",
+                parse_mode="Markdown",
+                reply_markup=kb,
+            )
+        else:
+            await message.answer(
+                f"Игра с кодом *{game_id}* найдена! 🎄\n"
+                "Теперь напиши свои *имя и фамилию* так, как они есть в списке у организатора.\n",
+                parse_mode="Markdown",
+            )
         return
 
     # --- 4) Пользователь уже в игре — вводит своё имя и фамилию ---
@@ -926,12 +1017,15 @@ async def handle_text(message: types.Message):
         )
         return
 
-    norm = normalize_name(text)
+    # ВАЖНО: убираем возможный хвост '@nickname', чтобы не ломать поиск
+    name_only, _ = parse_participant_line(text)
+    norm = normalize_name(name_only)
+
     if norm not in game.name_index:
         await message.answer(
             "Я не нашёл тебя в списке участников 😔\n\n"
             "Напиши *имя и фамилию* так, как они есть в списке у организатора,\n"
-            "в одну строку.\n\n"
+            "в одну строку (без лишних символов).\n\n"
             "Например:\n"
             "`Евгения Дмитриева`\n"
             "`Юлия Павликова`",
@@ -961,10 +1055,6 @@ async def handle_text(message: types.Message):
 
 
 async def main():
-    # В логах aiogram иногда можно увидеть:
-    # Failed to fetch updates - TelegramNetworkError: Request timeout
-    # Это нормально: долго не было новых апдейтов или сеть подвисла.
-    # Aiogram сам делает паузу и переподключается.
     await dp.start_polling(bot)
 
 
