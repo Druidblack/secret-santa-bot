@@ -1,406 +1,378 @@
-🎄 **Secret Santa Telegram Bot** (The English description is located below this one)
+🎄 Secret Santa Telegram Bot
+(The English description is located below this one)
 
-Ссылка на бот в самом Telegram: https://t.me/santasecretpresentsbot
-
-
-
-***Универсальный Telegram-бот для проведения игры «Тайный Санта» в любых компаниях, командах, университетах или семейных чатах.***
-
-
+Универсальный Telegram-бот для проведения игры «Тайный Санта» в любых компаниях, командах, университетах или семейных чатах.
 
 Бот позволяет провести честный и автоматический розыгрыш подарков:
 
-&nbsp;• никто не получает сам себя
+ • никто не получает сам себя
+ 
+ • каждый человек в каждой игре получает ровно одного получателя
+ 
+ • организатор задаёт список участников (при желании — с @никнеймами)
+ 
+ • участники сами заходят в нужные игры по коду
+ 
+ • бот учитывает разные варианты написания (ё/е, регистр, пробелы)
+ 
+ • бот умеет автоматически узнавать участников по @username
+ 
+ • каждый участник может указать и менять своё пожелание к подарку
+ 
+ • при изменении пожелания бот уведомляет дарителя (“Твой человек указал своё пожелание…”)
+ 
+ • результат в рамках игры стабилен: один участник → один человек
 
-&nbsp;• каждый человек получает ровно одного получателя
-
-&nbsp;• организатор задаёт список участников
-
-&nbsp;• участники сами вводят свои имена
-
-&nbsp;• бот учитывает разные варианты написания (ё/е, регистр, пробелы)
-
-&nbsp;• результат стабилен: один участник → один человек
-
-Бот поддерживает **много игр одновременно через game code**, а не "одна игра на один запуск".
+Бот поддерживает много игр одновременно через game code, а участник может участвовать сразу в нескольких играх и переключаться между ними, просто отправляя код нужной игры.
 
 Бот написан на Python + aiogram 3 и готов к использованию на Replit, VDS или любом Python-сервере.
 
+✨ Возможности
 
+👑 Для организатора:
 
+ • команда /newgame создаёт новую игру и выдаёт код игры (например, A7F9), который нужно отправить участникам.
+ 
+ • бот ожидает список участников одним сообщением, построчно, формат:
 
+Иван Иванов
 
-✨ **Возможности**
+Пётр Петров @petya
 
+Анна Смирнова @anna_smirnova
 
 
-👑 *Для организатора:*
+ • в каждой строке можно указать только имя/фамилию, а можно добавить и Telegram-аккаунт:
+Имя Фамилия @username — это позволит боту автоматически узнавать участника, когда он зайдёт в игру.
 
+ Код игры используется участниками, чтобы присоединиться именно к вашей игре.
 
+После получения списка участников, бот:
 
-&nbsp;• команда /newgame создаёт новую игру и выдаёт код игры (например, A7F9), который нужно отправить участникам.
+ • очищает список, удаляет дубликаты
+ 
+ • автоматически создаёт честное распределение «кто кому дарит» (дерранжмент — никто не получает сам себя)
 
-&nbsp;• бот ожидает список участников
+Далее у организатора доступны дополнительные функции:
 
-&nbsp;• имена принимаются построчно:
+ • /orgmenu — меню организатора со списком всех созданных им игр
+ 
+ • выбор конкретной игры показывает inline-меню:
+ 
+   • «👥 Участники и пожелания» — список всех участников игры + их пожелания к подаркам (если указаны)
+   
+   • «🔐 Кто кому дарит» — полный список пар «кто кому дарит»
 
+ • организатор может редактировать список участников уже после создания игры:
+ 
+   • /addplayer Имя Фамилия[@username] — добавить нового участника в выбранную игру
+   
+   • /delplayer Имя Фамилия — удалить участника из выбранной игры
 
+При добавлении/удалении участника бот старается минимально менять существующее распределение, перелопачивая только пары вокруг нового/удалённого участника. Если это невозможно без конфликтов, распределение пересчитывается честно заново.
 
-Юлия Павликова
+ • /reset — полный сброс всех игр этого организатора (включая незавершённые). Все созданные им комнаты удаляются.
 
-Евгения Дмитриева
+🎁 Для участника:
 
-Елена Мещерякова
+ • пишет /start
+ 
+ • вводит код игры от организатора (например, A7F9)
+ 
+ • может участвовать в нескольких играх — каждый новый код переключает бота в другую «комнату»
+ 
+ • если организатор указал в списке Имя Фамилия @username, бот автоматически узнаёт участника по его @никнейму
+ 
+ • если авто-опознания нет, участник вводит своё имя и фамилию так, как в списке у организатора
 
+После успешного входа в игру участник получает клавиатуру с кнопками:
 
-**Код игры используется участниками, чтобы присоединиться именно к вашей игре.**
+ • 🎁 Получить имя — бот сообщает, кому именно этот участник дарит подарок в текущей игре.
+ 
+ • 📝 Пожелание к подарку — участник может указать или изменить своё пожелание (желания к подарку).
 
+Пожелание можно задавать и менять:
 
-&nbsp;• бот очищает список, удаляет дубликаты
+ • при первом вводе — бот сохраняет текст как пожелание к подарку
+ 
+ • при повторном — обновляет пожелание
 
-&nbsp;• автоматически создаёт честное распределение «кто кому дарит»
+Когда участник впервые указывает или меняет своё пожелание, бот:
 
+ • находит того, кто дарит ему подарок в этой игре
+ 
+ • отправляет этому дарителю личное уведомление:
+ 
+«Твой человек указал/обновил своё пожелание…» с текстом желания
 
+Нажимать кнопку «🎁 Получить имя» можно сколько угодно раз — результат в рамках конкретной игры фиксированный и не меняется.
 
-🎁 *Для участника:*
+🧠 Умная обработка имён и пользователей
 
+Бот нормализует текст:
 
+ • ё = е
+ 
+ • регистр не важен (анГЕлина киСЕЛЕва)
+ 
+ • лишние пробелы не мешают
+ 
+ • принимает русские имена в любом виде
 
-&nbsp;• пишет /start
+Пример вводов, которые считаются одним и тем же человеком:
 
-&nbsp;**вводит код игры от организатора**
+ Ангелина Киселева
+ 
+ ангелина киселЕва
+ 
+ АНГЕЛИНА КИСЕЛЁВА
+ 
 
-&nbsp;• вводит своё имя и фамилию
+Кроме этого, бот умеет:
 
-&nbsp;• получает кнопку «🎁 Получить имя»
+ • сопоставлять участника с записью в списке по @username (если организатор указал @никнейм в строке участника)
+ 
+ • автоматически определять участника при входе в игру по его Telegram-аккаунту
+ 
+ • помнить участие одного пользователя сразу в нескольких играх и переключаться между ними по введённому коду игры.
 
-&nbsp;• бот сообщает, кому он дарит подарок
 
-&nbsp;• нажимать кнопку можно сколько угодно — результат фиксированный
+Бот поддерживает неограниченное количество игр одновременно: каждая игра имеет свой game_id (короткий код), а участники привязаны к нужной игре по этому коду. Один пользователь может быть в нескольких играх сразу.
 
+🎮 Команды
 
+Команда	Описание
 
+/start	Начать / присоединиться к игре, ввести код игры
 
+/help	Подробная инструкция
 
-🧠 **Умная обработка имён**
+/newgame	Создать новую игру (только организатор)
 
+/orgmenu	Меню организатора: список игр, просмотр участников/пожеланий и пар
 
+/addplayer Имя Фамилия[@username]	Добавить участника в выбранную игру организатора
 
-*Бот нормализует текст:*
+/delplayer Имя Фамилия	Удалить участника из выбранной игры организатора
 
+/reset	Полный сброс всех игр, созданных этим организатором
 
+/wish ...	(Опционально) указать/изменить своё пожелание текстом; основной способ — кнопка «📝 Пожелание к подарку»
 
-&nbsp;• ё = е
+🚀 Как запустить локально
 
-&nbsp;• регистр не важен (анГЕлина киСЕЛЕва)
-
-&nbsp;• лишние пробелы не мешают
-
-&nbsp;• принимает русские имена в любом виде
-
-
-
-*Пример вводов, которые считаются одним и тем же человеком:*
-
-
-
-Ангелина Киселева
-
-ангелина киселЕва
-
-АНГЕЛИНА    КИСЕЛЁВА
-
-
-
-🏗 **Архитектура (в двух словах)**
-
-
-
-&nbsp;• Game — объект текущей игры (список участников, раздача пар, сессии игроков)
-
-&nbsp;• make\_derangement() — создание перестановки без самопар
-
-&nbsp;• normalize\_name() — умная нормализация имени
-
-&nbsp;• aiogram Router — обработка команд
-
-&nbsp;• один запуск бота = одна игра (как обычный Secret Santa)
-
-
-**Бот поддерживает неограниченное количество игр одновременно: каждая игра имеет свой game_id (короткий код), а участники привязаны к нужной игре по этому коду.**
-
-
-🎮 **Команды**
-
-
-
-Команда Описание
-
-/start Начать участие
-
-/help Инструкция
-
-/newgame Создать новую игру (только организатор)
-
-/reset Полный сброс игры
-
-
-
-
-
-🚀 **Как запустить локально**
-
-
-
-*1. Установите зависимости*
-
-
+1. Установите зависимости
 
 pip install aiogram==3.4.1 python-dotenv aiohttp aiofiles
 
 
+2. Создайте файл .env:
 
-*2. Создайте файл .env:*
-
-
-
-BOT\_TOKEN=ВАШ\_ТОКЕН
+BOT_TOKEN=ВАШ_ТОКЕН
 
 
-
-*3. Запустите бота:*
-
-
+3. Запустите бота:
 
 python main.py
 
 
+❤️ Автор
 
-
-
-📦 **Список файлов репозитория**
-
-
-
-main.py
-
-pyproject.toml
-
-.env.example
-
-.gitignore
-
-README.md
-
-
-
-.env НЕ публикуется — токен хранится локально.
-
-
-
-
-
-❤️ **Автор**
-
-
-
-Бот разработан для массового использования: корпоративы, школьные группы, университеты, семейные чаты и любые события, где нужен честный и красивый Secret Santa.
+Бот разработан для массового использования: корпоративы, школьные группы, университеты, семейные чаты и любые события, где нужен честный и удобный Secret Santa с пожеланиями и уведомлениями для дарителей.
 
 Ссылка на бот: https://t.me/santasecretpresentsbot
 
-*Для связи с создателем: @angel\_eugeniya (TELEGRAM)*
-
-
-
-
+Для связи с создателем: @angel_eugeniya (TELEGRAM)
 
 ❄ Приятного использования!
 
+ENGLISH:
 
-
-**ENGLISH:**
-
-
-
-🎄 **Secret Santa Telegram Bot**
+🎄 Secret Santa Telegram Bot
 
 Bot link: https://t.me/santasecretpresentsbot
 
-**An universal Telegram bot for running Secret Santa games for companies, teams, school groups, university classrooms, communities, or families.**
+A universal Telegram bot for running Secret Santa games for companies, teams, school groups, university classrooms, communities, and families.
 
 The bot automates the entire process:
 
-&nbsp;✔ nobody gets themselves
+ ✔ nobody gets themselves
+ 
+ ✔ each participant in each game receives exactly one recipient
+ 
+ ✔ organizer defines the participants list (optionally with Telegram usernames)
+ 
+ ✔ participants join via game code
+ 
+ ✔ bot handles name normalization (ё/e, case, spaces)
+ 
+ ✔ bot can auto-recognize users by their @username
+ 
+ ✔ each participant can set and update a personal gift wish
+ 
+ ✔ whenever a wish is set/changed, the Secret Santa is notified with the wish text
+ 
+ ✔ each user always receives the same fixed recipient in a given game
 
-&nbsp;✔ each participant receives exactly one recipient
-
-&nbsp;✔ organizer sends one message with the participants list
-
-&nbsp;✔ participants join via game code
-
-&nbsp;✔ bot handles name normalization (ё/e, case, spaces)
-
-&nbsp;✔ each user always receives the same fixed recipient
-
-&nbsp;✔ supports multiple games simultaneously
-
+The bot supports multiple games in parallel via game codes, and a single user can participate in multiple games at once by switching between them using their game codes.
 
 Built with Python + aiogram 3, ready to run on Replit, VDS, Docker, or any Python server.
 
+✨ Features
 
+👑 For organizers
 
-✨ **Features**
-
-👑 *For organizers*
-
-&nbsp; • /newgame — create a new game and receive a game code (e.g. A7F9)
-
-&nbsp; • send a single message with the full participants list
-
- &nbsp;• names must be one per line:
-
-
-
-&nbsp; Yulia Pavlikova
-
-&nbsp; Evgenia Dmitrieva
-
-&nbsp; Elena Meshcheryakova
-
-
-
- &nbsp; **the bot:**
+ • /newgame — create a new game and receive a game code (e.g. A7F9)
  
- &nbsp;• cleans the list
- 
- &nbsp;• removes duplicates
- 
- &nbsp;• supports 2+ participants
- 
- &nbsp;• generates a fair derangement (nobody gets themselves)
+ • send a single message with the full participants list; one participant per line, for example:
 
-**After that, the organizer shares the bot link + game code with participants.**
+Yulia Pavlikova
+
+Evgenia Dmitrieva
+
+Elena Meshcheryakova @elena_m
 
 
-🎁 *For participants*
+You may specify just name + surname, or name + surname + @username:
 
- &nbsp;• send /start
- 
- &nbsp;• enter the game code from the organizer (e.g. A7F9)
- 
- &nbsp;• enter your first and last name
- 
- &nbsp;• press 🎁 Get recipient
- 
- &nbsp;• the bot tells you who you should give a gift to
- 
- &nbsp;• you can press the button as many times as you want — the result never changes
+FirstName LastName @username — this allows the bot to automatically recognize a participant by their Telegram account.
 
+The game code is what participants use to join exactly your game.
 
-🧠 **Smart name processing**
+After receiving the list, the bot:
 
+ • cleans the list
+ 
+ • removes duplicates
+ 
+ • ensures at least 2 participants
+ 
+ • generates a fair derangement (nobody gets themselves)
+
+Organizers also get:
+
+ • /orgmenu — organizer menu with a list of all games they created
+ 
+ • selecting a game opens an inline menu with:
+ 
+   • “👥 Participants & wishes” — full list of participants and their gift wishes (if any)
+   
+   • “🔐 Who gives to whom” — full mapping of gift pairs
+
+ • Editing participants after game creation:
+ 
+   • /addplayer FirstName LastName[@username] — add a new participant to the currently selected game
+   
+   • /delplayer FirstName LastName — remove a participant from the currently selected game
+
+When adding/removing participants, the bot tries to minimally modify the existing assignment, only adjusting pairs around the changed participant. If that’s impossible without conflicts, a new fair derangement is generated.
+
+ • /reset — reset all games created by this organizer (including pending ones). All their rooms are deleted.
+
+🎁 For participants
+
+ • send /start
+ 
+ • enter the game code from the organizer (e.g. A7F9)
+ 
+ • you can participate in multiple games; sending another game code switches the bot to that “room”
+ 
+ • if the organizer added your @username (FirstName LastName @your_handle), the bot will automatically match you to the participant record
+ 
+ • otherwise, you enter your first and last name as the organizer wrote them
+
+Once you are recognized in a game, you get a custom keyboard with:
+
+ • 🎁 Get recipient — the bot tells you who you should give a present to in the current game
+ 
+ • 📝 Gift wish — you can set or change your gift wish
+
+Gift wishes:
+
+ • first time you send a wish — it is stored as your preference
+ 
+ • subsequent wishes overwrite the previous one
+
+Whenever you set or update your wish, the bot:
+
+ • finds your Secret Santa in this game
+ 
+ • sends them a private notification:
+ 
+“Your person has set/updated their gift wish…” with the text of your wish
+
+You can press “🎁 Get recipient” as many times as you want — the result is always fixed for that game.
+
+🧠 Smart name & user processing
 
 The bot normalizes names:
 
- &nbsp;• ё = е
+ • treats ё as е
  
- &nbsp;• case-insensitive
+ • case-insensitive
  
- &nbsp;• multiple spaces → one
+ • collapses multiple spaces into one
  
- &nbsp;• accepts Russian names in any reasonable form
+ • accepts Russian names in any reasonable form
 
 All of the following are treated as the same person:
 
-
-&nbsp;Ангелина Киселева
-
-&nbsp;ангелина киселева
-
-&nbsp;АНГЕЛИНА КИСЕЛЁВА
-
-
-🏗 **Architecture (explained simply)**
-
- &nbsp;• Game — a single Secret Santa game tied to a game code
+ Ангелина Киселева
  
- &nbsp;• games[code] — storage of all active games
+ ангелина киселева
  
- &nbsp;• make_derangement() — generates a fair assignment (nobody gets themselves)
+ АНГЕЛИНА КИСЕЛЁВА
+
+Additionally, the bot:
+
+ • can match participants by their @username (if specified in the participants list)
  
- &nbsp;• normalize_name() — normalizes user input
+ • automatically recognizes users when they join a game
  
- &nbsp;• aiogram Router — processes commands and messages
- 
-&nbsp; • The bot supports unlimited parallel games — each company has its own code.
+ • allows a single Telegram user to be part of multiple games and switch between them just by sending another game code.
 
+🎮 Commands
 
+Command	Description
+/start	Join a game; enter a game code
 
-🎮 **Commands**
+/help	Full instructions
 
-*Command Description*
+/newgame	Create a new game (organizer only)
 
-&nbsp;/start Join a game; enter game code
+/orgmenu	Organizer menu: list games, view participants/wishes and pairs
 
-&nbsp;/help Full instructions
+/addplayer FirstName LastName[@username]	Add a participant to the selected game
 
-&nbsp;/newgame Create a new game (organizer only)
+/delplayer FirstName LastName	Remove a participant from the selected game
 
-&nbsp;/reset Reset the organizer’s active game
+/reset	Reset all games created by this organizer
 
+/wish ...	(Optional) Set/update your wish via text; main way is the “📝 Gift wish” button
 
+🚀 How to run locally
 
-🚀 **How to run locally**
-
-*1. Install dependencies*
+1. Install dependencies
 
 pip install aiogram==3.4.1 python-dotenv aiohttp aiofiles
 
-*2. Create a .env file*
+
+2. Create a .env file
 
 BOT_TOKEN=YOUR_TELEGRAM_BOT_TOKEN
 
-*3. Run the bot*
+
+3. Run the bot
 
 python main.py
 
 
+❤️ Author
 
-📦 **Repository structure**
-
-main.py
-
-pyproject.toml
-
-.env.example
-
-.gitignore
-
-README.md
-
- • main.py — bot logic
- 
- • .env.example — template for environment variables
- 
- • .env — NOT included; stores your real token
- 
- • .gitignore — prevents committing secrets
-
-
-
-❤️ **Author**
-
-This bot was created for public, large-scale usage: companies, school groups, university teams, family chats, and any events where Secret Santa is needed.
+This bot was created for public, large-scale usage: companies, school groups, university teams, family chats, and any events where a fair, user-friendly Secret Santa with wishes and donor notifications is needed.
 
 Bot link: https://t.me/santasecretpresentsbot
 
-*Contact: @angel_eugeniya (Telegram)*
+Contact: @angel_eugeniya (Telegram)
 
 ❄️ Enjoy your Secret Santa experience!
-
-
-
-
-
-
-
