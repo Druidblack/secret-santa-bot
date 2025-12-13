@@ -8,7 +8,7 @@ services:
 
     environment:
       TOKEN: "Bot Token"
-      ABS_CACHE_FILE: "/data/secret_santa_state.json"
+      STATE_FILE: "/data/secret_santa_state.json"
 
     volumes:
       - ./abs-namer-data:/data
