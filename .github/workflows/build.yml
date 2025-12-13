@@ -29,4 +29,4 @@ jobs:
           push: true
           tags: |
             ghcr.io/druidblack/secret-santa-bot:latest
-            ghcr.io/druidblack/asecret-santa-bot:${{ github.sha }}
+            ghcr.io/druidblack/secret-santa-bot:${{ github.sha }}
