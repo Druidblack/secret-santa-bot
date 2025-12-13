@@ -1,14 +1,13 @@
-version: "3.8"
+version: "3.9"
 
 services:
-  audiobookshelf_namer:
+  secret-santa-bot:
     image: ghcr.io/druidblack/secret-santa-bot:latest
     container_name: secret-santa-bot
     restart: unless-stopped
 
     environment:
-      TOKEN: "Bot Token"
-      STATE_FILE: "/data/secret_santa_state.json"
+      TOKEN: "bot token"
 
     volumes:
-      - ./abs-namer-data:/data
+      - ./secret_santa_state.json:/app/secret_santa_state.json
