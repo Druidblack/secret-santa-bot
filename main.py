@@ -80,15 +80,43 @@ def parse_participant_line(line: str) -> (str, Optional[str]):
     return display_name, handle
 
 
-def make_gift_keyboard() -> types.ReplyKeyboardMarkup:
-    """Клавиатура с кнопками '🎁 Получить имя' и '📝 Пожелание к подарку' в одном ряду."""
-    return types.ReplyKeyboardMarkup(
-        keyboard=[[
+def make_gift_keyboard(chat_active: bool = False) -> types.ReplyKeyboardMarkup:
+    """Клавиатура участника. Выход из чата виден только во время переписки."""
+    rows = [
+        [
             types.KeyboardButton(text="🎁 Получить имя"),
             types.KeyboardButton(text="📝 Пожелание к подарку"),
-        ]],
-        resize_keyboard=True,
-    )
+        ],
+        [types.KeyboardButton(text="💬 Анонимная переписка")],
+    ]
+    if chat_active:
+        rows.append([types.KeyboardButton(text="⛔ Завершить чат")])
+    return types.ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def make_chat_choice_keyboard(game_id: str, revision: int) -> types.InlineKeyboardMarkup:
+    """У каждого участника две роли: даритель и получатель."""
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(
+            text="🎁 Написать тому, кому дарю",
+            callback_data=f"chat_start:{game_id}:{revision}:to_recipient",
+        )],
+        [types.InlineKeyboardButton(
+            text="🎅 Написать моему Санте",
+            callback_data=f"chat_start:{game_id}:{revision}:to_santa",
+        )],
+    ])
+
+
+def make_chat_reply_keyboard(game_id: str, revision: int, direction: str) -> types.InlineKeyboardMarkup:
+    """Кнопка ответа ведёт обратно в эту пару и эту игру."""
+    reverse = "to_santa" if direction == "to_recipient" else "to_recipient"
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(
+            text="↩️ Ответить анонимно",
+            callback_data=f"chat_reply:{game_id}:{revision}:{reverse}",
+        )],
+    ])
 
 
 # ---------- СТРУКТУРА ИГРЫ ----------
@@ -137,6 +165,7 @@ class Game:
         self.assignment_by_name: Dict[str, str] = {}           # pretty -> pretty_получатель
         self.user_names: Dict[int, str] = {}                   # user_id -> pretty_name
         self.gift_wishes: Dict[str, str] = {}                  # pretty_name -> пожелание
+        self.chat_revision: int = 0                           # защита от старых кнопок ответов
 
         # генерируем распределение Санты
         receivers = make_derangement(self.names)
@@ -152,6 +181,7 @@ class Game:
             "assignment_by_name": self.assignment_by_name,
             "user_names": {str(uid): name for uid, name in self.user_names.items()},
             "gift_wishes": self.gift_wishes,
+            "chat_revision": self.chat_revision,
             "handle_to_name": self.handle_to_name,
         }
 
@@ -164,6 +194,7 @@ class Game:
         obj.assignment_by_name = dict(data.get("assignment_by_name", {}))
         obj.user_names = {int(uid): name for uid, name in data.get("user_names", {}).items()}
         obj.gift_wishes = dict(data.get("gift_wishes", {}))
+        obj.chat_revision = int(data.get("chat_revision", 0))
         obj.handle_to_name = dict(data.get("handle_to_name", {}))
         return obj
 
@@ -188,6 +219,10 @@ user_games: Dict[int, str] = {}
 # пользователи, от которых мы ждём текст пожелания после /wish или кнопки
 waiting_wish_users: Set[int] = set()
 
+# user_id -> {"game_id": ..., "direction": "to_santa" | "to_recipient"}
+# Сохраняем между перезапусками, но при переключении игры / изменении пар сбрасываем.
+chat_modes: Dict[int, Dict[str, str]] = {}
+
 STATE_FILE = "secret_santa_state.json"
 
 
@@ -198,6 +233,7 @@ def save_state() -> None:
         "games": {gid: game.to_dict() for gid, game in games.items()},
         "user_games": {str(uid): gid for uid, gid in user_games.items()},
         "organizer_games": {str(uid): gid for uid, gid in organizer_games.items()},
+        "chat_modes": {str(uid): mode for uid, mode in chat_modes.items()},
     }
     try:
         with open(STATE_FILE, "w", encoding="utf-8") as f:
@@ -237,8 +273,174 @@ def load_state() -> None:
         except Exception:
             pass
 
+    chat_modes.clear()
+    for uid_str, mode in data.get("chat_modes", {}).items():
+        try:
+            uid = int(uid_str)
+            gid = mode["game_id"]
+            direction = mode["direction"]
+            if (direction in ("to_santa", "to_recipient") and gid in games
+                    and user_games.get(uid) == gid
+                    and uid in games[gid].user_names):
+                chat_modes[uid] = {"game_id": gid, "direction": direction}
+        except (ValueError, KeyError, TypeError):
+            continue
+
 
 load_state()
+
+
+# ---------- АНОНИМНАЯ ПЕРЕПИСКА ----------
+
+
+def claim_participant(game: Game, user_id: int, name: str, username: Optional[str]) -> Optional[str]:
+    """Привязываем имя к одному Telegram ID, не позволяя занять чужое имя.
+
+    Если организатор указал @username, ручной ввод имени не обходит его проверку.
+    Для имён без @username по-прежнему требуется доверие к коду приглашения:
+    невозможно проверить реальную личность только по введённому имени.
+    """
+    existing = game.user_names.get(user_id)
+    if existing is not None and existing != name:
+        return "Твой Telegram-аккаунт уже привязан к другому имени в этой игре. Обратись к организатору."
+
+    expected_handles = [handle for handle, nm in game.handle_to_name.items() if nm == name]
+    if expected_handles and (not username or username.lower() not in expected_handles):
+        return "Для этого имени организатор указал другой @username. Войди с нужного Telegram-аккаунта."
+
+    if any(uid != user_id and nm == name for uid, nm in game.user_names.items()):
+        return "Это имя уже занято другим Telegram-аккаунтом. Если это ошибка, обратись к организатору."
+
+    game.user_names[user_id] = name
+    return None
+
+
+def auto_identify_participant(game: Game, user_id: int, username: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    """Сначала доверяем ранее привязанному Telegram ID, затем @username."""
+    existing = game.user_names.get(user_id)
+    if existing in game.names:
+        return existing, None
+    if existing is not None:
+        return None, "Прежняя запись о тебе больше не существует. Обратись к организатору."
+    if not username:
+        return None, None
+    pretty = game.handle_to_name.get(username.lower())
+    if not pretty:
+        return None, None
+    error = claim_participant(game, user_id, pretty, username)
+    return (None, error) if error else (pretty, None)
+
+
+def clear_chats_for_game(game_id: str) -> None:
+    """Изменённое распределение не должно незаметно менять собеседника активного чата."""
+    for uid, mode in list(chat_modes.items()):
+        if mode["game_id"] == game_id:
+            chat_modes.pop(uid, None)
+
+
+def chat_other_participant(game: Game, name: str, direction: str) -> Optional[str]:
+    if direction == "to_recipient":
+        return game.assignment_by_name.get(name)
+    if direction == "to_santa":
+        return next((giver for giver, receiver in game.assignment_by_name.items()
+                     if receiver == name), None)
+    return None
+
+
+def chat_other_user_id(game: Game, name: str) -> tuple[Optional[int], Optional[str]]:
+    matches = [uid for uid, participant in game.user_names.items() if participant == name]
+    if not matches:
+        return None, "Собеседник ещё не присоединился к игре. Сообщение не отправлено; попробуй позже."
+    if len(matches) > 1:
+        return None, "В игре обнаружено несколько аккаунтов с одним именем. Обратись к организатору."
+    return matches[0], None
+
+
+def chat_direction_label(direction: str) -> str:
+    if direction == "to_recipient":
+        return "человеку, которому ты даришь подарок"
+    return "твоему Тайному Санте"
+
+
+async def send_anonymous_message(message: types.Message, game_id: str, direction: str) -> None:
+    """Передаёт содержимое через бота без Telegram forwarding/sender attribution."""
+    user_id = message.from_user.id
+    game = games.get(game_id)
+    if (not game or user_games.get(user_id) != game_id
+            or user_id not in game.user_names):
+        chat_modes.pop(user_id, None)
+        save_state()
+        await message.answer("Сначала войди в игру и выбери переписку заново.")
+        return
+
+    my_name = game.user_names[user_id]
+    other_name = chat_other_participant(game, my_name, direction)
+    if not other_name:
+        chat_modes.pop(user_id, None)
+        save_state()
+        await message.answer("Не удалось найти собеседника. Выбери чат снова или обратись к организатору.")
+        return
+
+    recipient_id, error = chat_other_user_id(game, other_name)
+    if error:
+        await message.answer(error)
+        return
+
+    # Не сообщаем адресату Telegram ID, username или имя отправителя.
+    # В сообщении только роль, код игры и написанный пользователем текст/медиа.
+    role = "🎅 Сообщение от твоего Тайного Санты" if direction == "to_recipient" else "🎁 Сообщение от получателя твоего подарка"
+    header = f"{role} (игра {game_id})"
+    reply_markup = make_chat_reply_keyboard(game_id, game.chat_revision, direction)
+    content_type = message.content_type
+    allowed_caption_media = {"photo", "video", "animation", "voice"}
+    allowed_other_media = {"sticker", "video_note"}
+
+    if content_type != "text" and content_type not in allowed_caption_media | allowed_other_media:
+        await message.answer(
+            "В анонимном чате поддерживаются текст, фото, видео, GIF, голосовые сообщения и стикеры. "
+            "Контакты, документы и другие типы вложений не пересылаются, чтобы не раскрыть личные данные."
+        )
+        return
+    try:
+        if content_type == "text":
+            # Безопасный размер блока даже для Unicode / emoji (Telegram: 4096 символов).
+            chunks = [message.text[i:i + 1800] for i in range(0, len(message.text), 1800)]
+            for i, chunk in enumerate(chunks):
+                prefix = f"{header}\n\n" if i == 0 else "(продолжение)\n"
+                await bot.send_message(
+                    recipient_id, prefix + chunk,
+                    reply_markup=reply_markup if i == 0 else None,
+                )
+        elif content_type in allowed_caption_media:
+            caption = message.caption or ""
+            combined = header + ("\n\n" + caption if caption else "")
+            # Telegram ограничивает длину caption; не теряем длинный текст.
+            if len(combined.encode("utf-16-le")) // 2 <= 1024:
+                await bot.copy_message(
+                    chat_id=recipient_id, from_chat_id=message.chat.id,
+                    message_id=message.message_id, caption=combined,
+                    reply_markup=reply_markup,
+                )
+            else:
+                await bot.copy_message(
+                    chat_id=recipient_id, from_chat_id=message.chat.id,
+                    message_id=message.message_id, caption=header,
+                    reply_markup=reply_markup,
+                )
+                await bot.send_message(recipient_id, f"Текст к вложению:\n{caption}")
+        else:
+            # Стикеры и видеосообщения не имеют подписи: добавляем пояснение отдельно.
+            await bot.copy_message(
+                chat_id=recipient_id, from_chat_id=message.chat.id,
+                message_id=message.message_id, reply_markup=reply_markup,
+            )
+            await bot.send_message(recipient_id, header)
+    except Exception as exc:
+        print(f"Не удалось доставить анонимное сообщение в игре {game_id}: {exc}")
+        await message.answer("Не удалось доставить сообщение через Telegram. Возможно, собеседник заблокировал бота. Попробуй позже.")
+        return
+
+    await message.answer(f"✅ Анонимное сообщение отправлено {chat_direction_label(direction)}.")
 
 
 # ---------- УВЕДОМЛЕНИЕ ДАРИТЕЛЕЙ О ПОЖЕЛАНИИ ----------
@@ -392,7 +594,9 @@ async def cmd_help(message: types.Message):
         "3. Если твой @username уже указан в списке, я узнаю тебя автоматически.\n"
         "4. Если не узнал — введи свои имя и фамилию.\n"
         "5. Нажми кнопку «🎁 Получить имя».\n"
-        "6. Нажми кнопку «📝 Пожелание к подарку», чтобы задать или изменить пожелание.\n\n"
+        "6. Нажми кнопку «📝 Пожелание к подарку», чтобы задать или изменить пожелание.\n"
+        "7. Нажми «💬 Анонимная переписка» (/chat) и выбери: написать получателю или своему Санте.\n"
+        "   Ответить на входящее можно кнопкой под сообщением. Выход из чата: /cancel.\n\n"
         "*Бот:*\n"
         "- никому не даёт самого себя\n"
         "- один и тот же человек выдаётся только одному участнику в каждой игре\n"
@@ -403,6 +607,9 @@ async def cmd_help(message: types.Message):
 
 @dp.message(F.text == "/start")
 async def cmd_start(message: types.Message):
+    if chat_modes.pop(message.from_user.id, None) is not None:
+        save_state()
+    waiting_wish_users.discard(message.from_user.id)
     await message.answer(
         "Привет! 🎄\n\n"
         "Если ты *организатор* — напиши \n/newgame и создай список участников.\n"
@@ -411,8 +618,77 @@ async def cmd_start(message: types.Message):
         "Например: `A7F9`.\n\n"
         "Можно участвовать сразу в нескольких играх — каждый новый код переключает тебя в другую комнату.\n"
         "Если организатор прописал тебя как `Имя Фамилия @твой_ник`, "
-        "я узнаю тебя по @username автоматически.",
+        "я узнаю тебя по @username автоматически.\n\n"
+        "Внутри игры доступен анонимный чат с твоим Сантой и получателем подарка.",
         parse_mode="Markdown",
+    )
+
+
+@dp.message(F.text.in_({"💬 Анонимная переписка", "/chat"}))
+async def cmd_chat(message: types.Message):
+    user_id = message.from_user.id
+    game_id = user_games.get(user_id)
+    game = games.get(game_id) if game_id else None
+    if game is None or user_id not in game.user_names:
+        await message.answer("Сначала присоединись к игре по коду и укажи своё имя.")
+        return
+
+    chat_modes.pop(user_id, None)
+    waiting_wish_users.discard(user_id)
+    save_state()
+    await message.answer(
+        f"💬 Анонимная переписка в игре {game_id}.\n\n"
+        "Кому хочешь написать? Бот не покажет собеседнику твой Telegram-аккаунт.\n"
+        "Важно: текст и медиа могут сами раскрыть, кто ты.",
+        reply_markup=make_chat_choice_keyboard(game_id, game.chat_revision),
+    )
+
+
+@dp.callback_query(F.data.startswith("chat_start:") | F.data.startswith("chat_reply:"))
+async def cb_chat_select(callback: types.CallbackQuery):
+    data = (callback.data or "").split(":")
+    if len(data) != 4 or data[3] not in ("to_recipient", "to_santa"):
+        await callback.answer("Неверная команда чата", show_alert=True)
+        return
+    _, game_id, revision, direction = data
+    user_id = callback.from_user.id
+    game = games.get(game_id)
+    if game is None or user_id not in game.user_names:
+        await callback.answer("Ты не участвуешь в этой игре. Сначала войди по её коду.", show_alert=True)
+        return
+    if str(game.chat_revision) != revision:
+        await callback.answer("Распределение изменилось. Открой новое меню через /chat.", show_alert=True)
+        return
+    # Проверяем направление по актуальному распределению.
+    if not chat_other_participant(game, game.user_names[user_id], direction):
+        await callback.answer("Собеседник не найден", show_alert=True)
+        return
+
+    user_games[user_id] = game_id
+    waiting_wish_users.discard(user_id)
+    chat_modes[user_id] = {"game_id": game_id, "direction": direction}
+    save_state()
+    await callback.answer("Анонимный чат выбран")
+    await callback.message.answer(
+        f"💬 Игра {game_id}. Теперь ты пишешь {chat_direction_label(direction)}.\n"
+        "Отправь сообщение — я передам его анонимно. Можно отправлять несколько сообщений подряд.\n"
+        "Чтобы закончить, нажми «⛔ Завершить чат» или напиши /cancel.",
+        reply_markup=make_gift_keyboard(chat_active=True),
+    )
+
+
+@dp.message(F.text.in_({"⛔ Завершить чат", "/cancel"}))
+async def cmd_cancel(message: types.Message):
+    user_id = message.from_user.id
+    was_chat = chat_modes.pop(user_id, None) is not None
+    was_wish = user_id in waiting_wish_users
+    waiting_wish_users.discard(user_id)
+    if was_chat:
+        save_state()
+    await message.answer(
+        "Переписка завершена. Чтобы начать снова, нажми «💬 Анонимная переписка»."
+        if was_chat else "Ожидание сообщения отменено." if was_wish else "Сейчас нечего отменять.",
+        reply_markup=make_gift_keyboard(),
     )
 
 
@@ -423,6 +699,9 @@ async def cmd_newgame(message: types.Message):
     После этого бот ждёт список участников в следующем сообщении.
     """
     organizer_id = message.from_user.id
+    if chat_modes.pop(organizer_id, None) is not None:
+        save_state()
+    waiting_wish_users.discard(organizer_id)
 
     game_id = generate_game_id()
     pending_game_codes[organizer_id] = game_id
@@ -467,7 +746,8 @@ async def cmd_reset(message: types.Message):
             if user_games.get(uid) == game_id:
                 user_games.pop(uid, None)
 
-        # удаляем игру
+        # удаляем игру и связанные с ней режимы переписки
+        clear_chats_for_game(game_id)
         games.pop(game_id, None)
 
     # убираем ссылку на "последнюю активную" игру для этого организатора
@@ -496,6 +776,8 @@ async def handle_get_recipient(message: types.Message):
     Участник просит своего получателя.
     """
     user_id = message.from_user.id
+    if chat_modes.pop(user_id, None) is not None:
+        save_state()
 
     if user_id not in user_games:
         await message.answer(
@@ -547,7 +829,7 @@ async def handle_get_recipient(message: types.Message):
             "Никому не рассказывай 😉"
         )
 
-    await message.answer(text, parse_mode="Markdown")
+    await message.answer(text, parse_mode="Markdown", reply_markup=make_gift_keyboard())
 
 
 @dp.message(F.text == "📝 Пожелание к подарку")
@@ -589,6 +871,8 @@ async def handle_wish_button(message: types.Message):
     pretty_name = game.user_names[user_id]
     current_wish = game.gift_wishes.get(pretty_name)
 
+    if chat_modes.pop(user_id, None) is not None:
+        save_state()
     waiting_wish_users.add(user_id)
 
     if current_wish:
@@ -596,6 +880,7 @@ async def handle_wish_button(message: types.Message):
             f"Сейчас твоё пожелание к подарку в игре {game_id}:\n«{current_wish}»\n\n"
             "Отправь *одним следующим сообщением* новый текст, если хочешь изменить пожелание.",
             parse_mode="Markdown",
+            reply_markup=make_gift_keyboard(),
         )
     else:
         await message.answer(
@@ -604,6 +889,7 @@ async def handle_wish_button(message: types.Message):
             "Например:\n"
             "«Что-то сладкое и тёплые носки» 🙂",
             parse_mode="Markdown",
+            reply_markup=make_gift_keyboard(),
         )
 
 
@@ -647,6 +933,8 @@ async def cmd_wish(message: types.Message):
 
     pretty_name = game.user_names[user_id]
 
+    if chat_modes.pop(user_id, None) is not None:
+        save_state()
     parts = text.split(maxsplit=1)
     if len(parts) == 2 and parts[1].strip():
         # вариант `/wish текст` — обрабатываем сразу
@@ -710,6 +998,8 @@ async def cmd_addplayer(message: types.Message):
         await message.answer(str(e))
         return
 
+    game.chat_revision += 1
+    clear_chats_for_game(game_id)
     save_state()
     await message.answer(
         f"Участник «{new_line}» добавлен в игру {game_id}.\n"
@@ -762,6 +1052,8 @@ async def cmd_delplayer(message: types.Message):
         await message.answer(str(e))
         return
 
+    game.chat_revision += 1
+    clear_chats_for_game(game_id)
     save_state()
     text = f"Участник «{pretty}» удалён из игры {game_id}."
     if mode == "recomputed":
@@ -979,6 +1271,36 @@ async def cb_org_pairs(callback: types.CallbackQuery):
     await callback.answer()
 
 
+async def switch_to_game(message: types.Message, game_id: str, was_in_game: bool) -> None:
+    """Переключение комнаты: сбрасываем предыдущий чат и проверяем уникальность имени."""
+    user_id = message.from_user.id
+    game = games[game_id]
+    chat_modes.pop(user_id, None)
+    waiting_wish_users.discard(user_id)
+    user_games[user_id] = game_id
+    pretty, error = auto_identify_participant(game, user_id, message.from_user.username)
+    save_state()
+
+    prefix = f"Ты переключился в игру *{game_id}* 🎄" if was_in_game else f"Игра с кодом *{game_id}* найдена! 🎄"
+    if error:
+        await message.answer(f"{prefix}\n\n{error}", parse_mode="Markdown")
+    elif pretty:
+        await message.answer(
+            f"{prefix}\n"
+            f"Я нашёл тебя в списке как *{pretty}*.\n\n"
+            "Нажми «🎁 Получить имя», «📝 Пожелание к подарку» "
+            "или «💬 Анонимная переписка».",
+            parse_mode="Markdown",
+            reply_markup=make_gift_keyboard(),
+        )
+    else:
+        await message.answer(
+            f"{prefix}\nТеперь напиши свои *имя и фамилию* "
+            "точно как в списке организатора.",
+            parse_mode="Markdown",
+        )
+
+
 # ------------------ ОБРАБОТЧИК ВСЕГО ОСТАЛЬНОГО ТЕКСТА ------------------
 
 
@@ -997,7 +1319,10 @@ async def handle_text(message: types.Message):
     user_id = message.from_user.id
 
     # --- 1) Пользователь присылает текст пожелания после кнопки или /wish ---
-    if user_id in waiting_wish_users:
+    if user_id in waiting_wish_users and text.upper() not in games:
+        if not text:
+            await message.answer("Пожелание должно быть текстом. Отправь текст или /cancel.")
+            return
         waiting_wish_users.discard(user_id)
 
         if user_id not in user_games:
@@ -1081,92 +1406,34 @@ async def handle_text(message: types.Message):
             "3) вводят код игры\n"
             "4) (если я их не узнал по @username) — вводят имя и фамилию\n"
             "5) нажимают «🎁 Получить имя»\n"
-            "6) нажимают «📝 Пожелание к подарку» и указывают пожелание",
+            "6) нажимают «📝 Пожелание к подарку» и указывают пожелание\n"
+            "7) для личных вопросов используют «💬 Анонимная переписка»",
             parse_mode="Markdown",
         )
         return
 
-    # --- 3A) Пользователь ещё не в игре — трактуем ввод как код игры ---
+    # --- 3A/3B) Ввод кода игры или переключение между играми ---
     if user_id not in user_games:
         game_id = text.upper()
-        game = games.get(game_id)
-
-        if game is None:
+        if game_id not in games:
             await message.answer(
                 "Я не нашёл игру с таким кодом 😔\n"
                 "Проверь, правильно ли ты ввёл код (например: `A7F9`).",
                 parse_mode="Markdown",
             )
             return
-
-        user_games[user_id] = game_id
-
-        # пробуем определить по @username
-        tg_username = message.from_user.username
-        auto_bound = False
-        pretty = None
-        if tg_username:
-            h = tg_username.lower()
-            pretty = game.handle_to_name.get(h)
-            if pretty:
-                game.user_names[user_id] = pretty
-                auto_bound = True
-
-        save_state()
-
-        if auto_bound:
-            kb = make_gift_keyboard()
-            await message.answer(
-                f"Игра с кодом *{game_id}* найдена! 🎄\n"
-                f"Я нашёл тебя в списке как *{pretty}* по твоему @username.\n\n"
-                "Теперь нажми кнопку «🎁 Получить имя», чтобы узнать, кому ты даришь подарок.\n\n"
-                "Если хочешь, нажми «📝 Пожелание к подарку», чтобы задать пожелание.",
-                parse_mode="Markdown",
-                reply_markup=kb,
-            )
-        else:
-            await message.answer(
-                f"Игра с кодом *{game_id}* найдена! 🎄\n"
-                "Теперь напиши свои *имя и фамилию* так, как они есть в списке у организатора.\n",
-                parse_mode="Markdown",
-            )
+        await switch_to_game(message, game_id, was_in_game=False)
         return
 
-    # --- 3B) Пользователь уже в какой-то игре — проверяем, не ввёл ли он НОВЫЙ код игры ---
     maybe_code = text.upper()
     if maybe_code in games:
-        game = games[maybe_code]
-        user_games[user_id] = maybe_code
+        await switch_to_game(message, maybe_code, was_in_game=True)
+        return
 
-        # пробуем автоопознать по username в НОВОЙ игре
-        tg_username = message.from_user.username
-        auto_bound = False
-        pretty = None
-        if tg_username:
-            h = tg_username.lower()
-            pretty = game.handle_to_name.get(h)
-            if pretty:
-                game.user_names[user_id] = pretty
-                auto_bound = True
-
-        save_state()
-
-        if auto_bound:
-            kb = make_gift_keyboard()
-            await message.answer(
-                f"Ты переключился в игру *{maybe_code}* 🎄\n"
-                f"Я нашёл тебя в её списке как *{pretty}* по твоему @username.\n\n"
-                "Теперь нажми «🎁 Получить имя», чтобы узнать, кому ты даришь подарок в этой игре,\n"
-                "или «📝 Пожелание к подарку», чтобы указать пожелание.",
-                parse_mode="Markdown",
-                reply_markup=kb,
-            )
-        else:
-            await message.answer(
-                f"Ты переключился в игру *{maybe_code}* 🎄\n"
-                "Теперь напиши свои *имя и фамилию* так, как они есть в списке у организатора этой игры.\n",
-                parse_mode="Markdown",
-            )
+    # --- Если выбран анонимный чат, любой обычный текст/медиа идёт собеседнику ---
+    mode = chat_modes.get(user_id)
+    if mode:
+        await send_anonymous_message(message, mode["game_id"], mode["direction"])
         return
 
     # --- 4) Пользователь уже в игре, это не код — работаем в контексте ТЕКУЩЕЙ игры ---
@@ -1186,28 +1453,29 @@ async def handle_text(message: types.Message):
         await message.answer(
             f"Сейчас ты в игре {game_id} 🙂\n"
             "Нажми «🎁 Получить имя», чтобы узнать, кому ты даришь подарок,\n"
-            "или «📝 Пожелание к подарку», чтобы задать или изменить пожелание.",
+            "«📝 Пожелание к подарку» или «💬 Анонимная переписка».",
             reply_markup=kb,
         )
         return
 
-    # Если ещё не знаем — сперва пробуем по @username (на случай старых игр / старого состояния)
-    tg_username = message.from_user.username
-    if tg_username:
-        h = tg_username.lower()
-        pretty = game.handle_to_name.get(h)
-        if pretty:
-            game.user_names[user_id] = pretty
-            save_state()
-            kb = make_gift_keyboard()
-            await message.answer(
-                f"Я нашёл тебя в списке игры {game_id} как *{pretty}* по твоему @username.\n\n"
-                "Теперь нажми «🎁 Получить имя», чтобы узнать, кому ты даришь подарок,\n"
-                "или «📝 Пожелание к подарку», чтобы задать пожелание.",
-                parse_mode="Markdown",
-                reply_markup=kb,
-            )
-            return
+    # Если ещё не знаем — сперва пробуем @username (для старых игр / состояний).
+    pretty, error = auto_identify_participant(game, user_id, message.from_user.username)
+    if error:
+        await message.answer(error)
+        return
+    if pretty:
+        save_state()
+        await message.answer(
+            f"Я нашёл тебя в списке игры {game_id} как *{pretty}* по @username.\n\n"
+            "Теперь доступны получение имени, пожелание и анонимная переписка.",
+            parse_mode="Markdown",
+            reply_markup=make_gift_keyboard(),
+        )
+        return
+
+    if not text:
+        await message.answer("Для входа напиши своё имя и фамилию текстом.")
+        return
 
     # ВАЖНО: убираем возможный хвост '@nickname', чтобы не ломать поиск по имени
     name_only, _ = parse_participant_line(text)
@@ -1226,7 +1494,10 @@ async def handle_text(message: types.Message):
         return
 
     pretty_name = game.name_index[norm]
-    game.user_names[user_id] = pretty_name
+    error = claim_participant(game, user_id, pretty_name, message.from_user.username)
+    if error:
+        await message.answer(error)
+        return
     save_state()
 
     kb = make_gift_keyboard()
@@ -1235,7 +1506,7 @@ async def handle_text(message: types.Message):
         f"Отлично, {pretty_name}! 🎄\n"
         f"Твоё имя записано в игре {game_id}.\nТеперь нажми \n"
         f"«🎁 Получить имя», чтобы узнать, кому ты даришь подарок,\n"
-        f"и при желании «📝 Пожелание к подарку», чтобы указать своё пожелание.",
+        f"«📝 Пожелание к подарку» или «💬 Анонимная переписка».",
         reply_markup=kb,
     )
 
