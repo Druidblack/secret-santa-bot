@@ -98,7 +98,7 @@ def make_chat_choice_keyboard(game_id: str, revision: int) -> types.InlineKeyboa
     """У каждого участника две роли: даритель и получатель."""
     return types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(
-            text="🎁 Написать тому, кому дарю",
+            text="🎁 Написать моему Подопечному",
             callback_data=f"chat_start:{game_id}:{revision}:to_recipient",
         )],
         [types.InlineKeyboardButton(
@@ -338,6 +338,88 @@ def clear_chats_for_game(game_id: str) -> None:
             chat_modes.pop(uid, None)
 
 
+def delete_game(game_id: str, organizer_id: int) -> bool:
+    """Безопасно удаляет одну игру владельца и все привязки к ней.
+
+    user_games содержит только текущую комнату, а game.user_names сохраняет
+    участие и после переключения на другую комнату. Убираем все привязки
+    к удалённой игре, включая людей, которые ввели код, но ещё не назвали себя.
+    """
+    game = games.get(game_id)
+    if game is None or game.organizer_id != organizer_id:
+        return False
+
+    clear_chats_for_game(game_id)
+    for uid, current_game in list(user_games.items()):
+        if current_game == game_id:
+            user_games.pop(uid, None)
+            waiting_wish_users.discard(uid)
+
+    games.pop(game_id, None)
+    if organizer_games.get(organizer_id) == game_id:
+        remaining = sorted(gid for gid, other in games.items()
+                           if other.organizer_id == organizer_id)
+        if remaining:
+            organizer_games[organizer_id] = remaining[-1]
+        else:
+            organizer_games.pop(organizer_id, None)
+    save_state()
+    return True
+
+
+def participant_join_status(game: Game) -> tuple[List[str], List[str]]:
+    """Вступил = подтвердил имя. Ввод одного лишь кода не засчитываем.
+
+    Не используем user_games: участник остаётся в комнате, даже если
+    переключился в боте на другую игру.
+    """
+    joined = set(game.user_names.values())
+    return ([name for name in game.names if name in joined],
+            [name for name in game.names if name not in joined])
+
+
+def organizer_game_keyboard(game_id: str, game: Game) -> types.InlineKeyboardMarkup:
+    joined, pending = participant_join_status(game)
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(
+            text="👥 Участники и пожелания", callback_data=f"org_members:{game_id}",
+        )],
+        [types.InlineKeyboardButton(
+            text=f"✅ Вступили ({len(joined)})", callback_data=f"org_joined:{game_id}",
+        )],
+        [types.InlineKeyboardButton(
+            text=f"⏳ Ещё не вступили ({len(pending)})", callback_data=f"org_pending:{game_id}",
+        )],
+        [types.InlineKeyboardButton(
+            text="🔐 Кто кому дарит", callback_data=f"org_pairs:{game_id}",
+        )],
+        [types.InlineKeyboardButton(
+            text="🗑 Удалить комнату", callback_data=f"org_delete:{game_id}",
+        )],
+        [types.InlineKeyboardButton(
+            text="⬅️ К списку игр", callback_data="org_list_games",
+        )],
+    ])
+
+
+async def send_organizer_list(message: types.Message, header: str, lines: List[str]) -> None:
+    """Делит большие списки на сообщения, чтобы не превысить лимит Telegram."""
+    chunk = header
+    for line in lines:
+        # Отдельное очень длинное имя всё равно умещаем в предел Telegram.
+        if len(chunk) + len(line) + 1 > 3500:
+            await message.answer(chunk)
+            chunk = header + " (продолжение)"
+        chunk += "\n" + line
+    await message.answer(chunk)
+
+
+def listed_participant(game: Game, name: str) -> str:
+    """Показываем только введённый организатором @username, не Telegram ID."""
+    handle = next((h for h, n in game.handle_to_name.items() if n == name), None)
+    return f"{name} (@{handle})" if handle else name
+
+
 def chat_other_participant(game: Game, name: str, direction: str) -> Optional[str]:
     if direction == "to_recipient":
         return game.assignment_by_name.get(name)
@@ -358,7 +440,7 @@ def chat_other_user_id(game: Game, name: str) -> tuple[Optional[int], Optional[s
 
 def chat_direction_label(direction: str) -> str:
     if direction == "to_recipient":
-        return "человеку, которому ты даришь подарок"
+        return "твоему Подопечному"
     return "твоему Тайному Санте"
 
 
@@ -582,7 +664,8 @@ async def cmd_help(message: types.Message):
         "3. Отправь участникам код игры и ссылку на бота.\n"
         "4. Используй /orgmenu, чтобы открыть меню организатора и выбрать игру.\n"
         "5. После выбора игры можно:\n"
-        "   • смотреть списки через кнопки меню\n"
+        "   • смотреть приглашённых, вступивших и ещё не вступивших через кнопки меню\n"
+        "   • удалять одну выбранную комнату с подтверждением\n"
         "   • редактировать участников командами:\n"
         "     `/addplayer Имя Фамилия[@username]` — добавить\n"
         "     `/delplayer Имя Фамилия` — удалить\n"
@@ -595,7 +678,7 @@ async def cmd_help(message: types.Message):
         "4. Если не узнал — введи свои имя и фамилию.\n"
         "5. Нажми кнопку «🎁 Получить имя».\n"
         "6. Нажми кнопку «📝 Пожелание к подарку», чтобы задать или изменить пожелание.\n"
-        "7. Нажми «💬 Анонимная переписка» (/chat) и выбери: написать получателю или своему Санте.\n"
+        "7. Нажми «💬 Анонимная переписка» (/chat) и выбери: написать Подопечному или своему Санте.\n"
         "   Ответить на входящее можно кнопкой под сообщением. Выход из чата: /cancel.\n\n"
         "*Бот:*\n"
         "- никому не даёт самого себя\n"
@@ -735,24 +818,11 @@ async def cmd_reset(message: types.Message):
     # Удаляем незавершённую (ожидающую список) игру, если есть
     pending_game_codes.pop(organizer_id, None)
 
-    # Для каждой игры чистим участников и удаляем игру
+    # Сбрасываем только игры этого организатора, удаляя все связи участников.
     for game_id in owned_games:
-        game = games.get(game_id)
-        if not game:
-            continue
+        delete_game(game_id, organizer_id)
 
-        # убираем всех участников этой игры из user_games
-        for uid in list(game.user_names.keys()):
-            if user_games.get(uid) == game_id:
-                user_games.pop(uid, None)
-
-        # удаляем игру и связанные с ней режимы переписки
-        clear_chats_for_game(game_id)
-        games.pop(game_id, None)
-
-    # убираем ссылку на "последнюю активную" игру для этого организатора
     organizer_games.pop(organizer_id, None)
-
     save_state()
 
     if owned_games:
@@ -1171,32 +1241,13 @@ async def cb_org_game(callback: types.CallbackQuery):
     organizer_games[organizer_id] = game_id
     save_state()
 
-    kb = types.InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                types.InlineKeyboardButton(
-                    text="👥 Участники и пожелания",
-                    callback_data=f"org_members:{game_id}",
-                )
-            ],
-            [
-                types.InlineKeyboardButton(
-                    text="🔐 Кто кому дарит",
-                    callback_data=f"org_pairs:{game_id}",
-                )
-            ],
-            [
-                types.InlineKeyboardButton(
-                    text="⬅️ К списку игр",
-                    callback_data="org_list_games",
-                )
-            ],
-        ]
-    )
+    kb = organizer_game_keyboard(game_id, game)
+    joined, pending = participant_join_status(game)
 
     await callback.message.edit_text(
         f"Игра *{game_id}*.\n"
-        f"Участников: {len(game.names)}.\n\n"
+        f"Участников: {len(game.names)}. Вступили: {len(joined)}. "
+        f"Ещё не вступили: {len(pending)}.\n\n"
         "Выберите, что показать, или используйте команды:\n"
         "`/addplayer Имя Фамилия[@username]` — добавить участника\n"
         "`/delplayer Имя Фамилия` — удалить участника\n"
@@ -1205,6 +1256,80 @@ async def cb_org_game(callback: types.CallbackQuery):
         parse_mode="Markdown",
     )
     await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("org_joined:") | F.data.startswith("org_pending:"))
+async def cb_org_join_status(callback: types.CallbackQuery):
+    """Два списка по факту подтверждения имени в конкретной комнате."""
+    action, game_id = (callback.data or "").split(":", 1)
+    game = games.get(game_id)
+    if game is None or game.organizer_id != callback.from_user.id:
+        await callback.answer("Комната не найдена или вам не принадлежит.", show_alert=True)
+        return
+
+    joined, pending = participant_join_status(game)
+    selected = joined if action == "org_joined" else pending
+    title = "✅ Вступили" if action == "org_joined" else "⏳ Ещё не вступили"
+    header = f"{title} в комнату {game_id}: {len(selected)} из {len(game.names)}"
+    lines = [f"{i}. {listed_participant(game, name)}"
+             for i, name in enumerate(selected, 1)]
+    if not lines:
+        lines = ["Пока никого." if action == "org_joined" else "Все приглашённые уже вступили!"]
+    if action == "org_pending":
+        lines.append("\nВ список «Вступили» человек попадёт после входа по коду "
+                     "и подтверждения своего имени (вручную или по @username).")
+    await send_organizer_list(callback.message, header, lines)
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("org_delete:"))
+async def cb_org_delete(callback: types.CallbackQuery):
+    """Просим подтверждение перед необратимым удалением конкретной комнаты."""
+    _, game_id = (callback.data or "").split(":", 1)
+    game = games.get(game_id)
+    if game is None or game.organizer_id != callback.from_user.id:
+        await callback.answer("Комната не найдена или вам не принадлежит.", show_alert=True)
+        return
+
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(
+            text="🗑 Да, удалить комнату", callback_data=f"org_delete_confirm:{game_id}",
+        )],
+        [types.InlineKeyboardButton(
+            text="Отмена", callback_data=f"org_game:{game_id}",
+        )],
+    ])
+    await callback.message.edit_text(
+        f"⚠️ Удалить комнату {game_id}?\n\n"
+        f"Участников: {len(game.names)}.\n"
+        "Все назначения подарков, пожелания и анонимные чаты этой комнаты "
+        "будут удалены без возможности восстановления.\n\n"
+        "Остальные ваши комнаты не пострадают.",
+        reply_markup=kb,
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("org_delete_confirm:"))
+async def cb_org_delete_confirm(callback: types.CallbackQuery):
+    _, game_id = (callback.data or "").split(":", 1)
+    if not delete_game(game_id, callback.from_user.id):
+        await callback.answer("Комната уже удалена или вам не принадлежит.", show_alert=True)
+        return
+
+    owns_more = any(g.organizer_id == callback.from_user.id for g in games.values())
+    markup = (types.InlineKeyboardMarkup(inline_keyboard=[[
+        types.InlineKeyboardButton(text="⬅️ К списку игр", callback_data="org_list_games"),
+    ]]) if owns_more else None)
+    await callback.message.edit_text(
+        f"✅ Комната {game_id} удалена.\n"
+        "Остальные комнаты сохранены. "
+        "Для управления ими откройте /orgmenu." if owns_more else
+        f"✅ Комната {game_id} удалена.\n"
+        "Больше созданных вами комнат нет. Новую можно создать через /newgame.",
+        reply_markup=markup,
+    )
+    await callback.answer("Комната удалена")
 
 
 @dp.callback_query(F.data.startswith("org_members:"))
